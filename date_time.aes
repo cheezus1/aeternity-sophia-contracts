@@ -12,7 +12,7 @@ contract Identity =
     }
 
   record state =
-  	{
+    {
       day_in_seconds : int,
       year_in_seconds : int,
       leap_year_in_seconds : int,
@@ -20,6 +20,8 @@ contract Identity =
       minute_in_seconds : int,
       origin_year : int
     }
+
+  type months_day_count = map(int, int)
 
   public function init() : state =
     { day_in_seconds = 86400,
@@ -31,13 +33,13 @@ contract Identity =
 
   public function is_leap_year(year : int) : bool =
     if(modulo(year, 4) != 0)
-    	false
+      false
     elif(modulo(year, 100) != 0)
-    	true
+      true
     elif(modulo(year, 400) != 0)
-    	false
+      false
     else
-    	true
+      true
 
   public function leap_years_before(year : int) : int =
     let year_sub = year - 1
@@ -53,7 +55,7 @@ contract Identity =
     else
       28
 
-  public function parse_timestamp(timestamp : int) : int =
+  public function parse_timestamp(timestamp : int) : date_time =
     let dt : date_time = date_time_init()
 
     // year
@@ -64,8 +66,26 @@ contract Identity =
       state.year_in_seconds * (dt.year - state.origin_year - buf)
 
     // month
+    let (seconds_accounted_for, month') =
+      determine_month(1, dt.year, timestamp, seconds_accounted_for)
+    let dt = dt{ month = month' }
 
-    1
+    // day
+    let dt = dt{ day = determine_day(1, dt.month, dt.year, timestamp, seconds_accounted_for) }
+
+    // hour
+    let dt = dt{ hour = get_hour(timestamp) }
+
+    // minute
+    let dt = dt{ minute = get_minute(timestamp) }
+
+    // second
+    let dt = dt{ second = get_second(timestamp) }
+
+    // day of week
+    let dt = dt{ weekday = get_weekday(timestamp) }
+
+    dt
 
   public function get_year(timestamp : int) : int =
     let year = state.origin_year + timestamp / state.year_in_seconds
@@ -73,9 +93,89 @@ contract Identity =
     let seconds_accounted_for = state.leap_year_in_seconds * num_leap_years +
       state.year_in_seconds * (year - state.origin_year - num_leap_years)
 
-    _get_year(timestamp, seconds_accounted_for, year)
+    get_year'(timestamp, seconds_accounted_for, year)
 
-  private function _get_year(timestamp : int, seconds_accounted_for : int, year : int) : int =
+  public function get_hour(timestamp : int) : int =
+    modulo(timestamp / 60 / 60, 24)
+
+  public function get_minute(timestamp : int) : int =
+    modulo(timestamp / 60, 60)
+
+  public function get_second(timestamp : int) : int =
+    modulo(timestamp, 60)
+
+  public function get_weekday(timestamp : int) : int =
+    modulo(timestamp / state.day_in_seconds + 4, 7)
+
+  public function to_timestamp(year : int, month : int, day : int) : int =
+    to_timestamp'''(year, month, day, 0, 0, 0)
+
+  public function to_timestamp'(year : int, month : int, day : int, hour : int) : int =
+    to_timestamp'''(year, month, day, hour, 0, 0)
+
+  public function to_timestamp''(year : int, month : int, day : int, hour : int, minute : int) : int =
+    to_timestamp'''(year, month, day, hour, minute, 0)
+
+  public function to_timestamp'''(year : int, month : int,
+    day : int, hour : int, minute : int, second : int) : int =
+
+    // year
+    let timestamp = add_year_to_timestamp(state.origin_year, year, 0)
+
+    // month
+    let february_days_count =
+      if(is_leap_year(year))
+        29
+      else
+        28
+    let months_day_count_map : months_day_count =
+      { [0] = 31,
+        [1] = february_days_count,
+        [2] = 31,
+        [3] = 30,
+        [4] = 31,
+        [5] = 30,
+        [6] = 31,
+        [7] = 31,
+        [8] = 30,
+        [9] = 31,
+        [10] = 30,
+        [11] = 31 }
+    let timestamp = add_months_to_timestamp(1, month, months_day_count_map, timestamp)
+
+    // day
+    let timestamp = timestamp + state.day_in_seconds * (day - 1)
+
+    // hour
+    let timestamp = timestamp + state.hour_in_seconds * hour
+
+    // minute
+    let timestamp = timestamp + state.minute_in_seconds * minute
+
+    // second
+    let timestamp = timestamp + second
+
+    timestamp
+
+  private function add_year_to_timestamp(i : int, year : int, timestamp : int) : int =
+    if(i >= year)
+      timestamp
+    else
+      if(is_leap_year(i))
+        add_year_to_timestamp(i + 1, year, timestamp + state.leap_year_in_seconds)
+      else
+        add_year_to_timestamp(i + 1, year, timestamp + state.year_in_seconds)
+
+  private function add_months_to_timestamp(i : int, month : int,
+    months_day_count_map : months_day_count, timestamp : int) : int =
+
+    if(i >= month)
+      timestamp
+    else
+      add_months_to_timestamp(i + 1, month,
+        months_day_count_map, timestamp + state.day_in_seconds * months_day_count_map[i])
+
+  private function get_year'(timestamp : int, seconds_accounted_for : int, year : int) : int =
     if(seconds_accounted_for =< timestamp)
       year
     else
@@ -86,7 +186,29 @@ contract Identity =
         else
           seconds_accounted_for - state.year_in_seconds
 
-      _get_year(timestamp, seconds_accounted_for, year - 1)
+      get_year'(timestamp, seconds_accounted_for, year - 1)
+
+  private function determine_month(i : int,
+    year : int, timestamp : int,
+    seconds_accounted_for : int) : (int, int) =
+
+    let month_valid : bool = i =< 12
+    let seconds_in_month : int = state.day_in_seconds * get_days_in_month(i, year)
+    let seconds_within_month : bool = seconds_in_month + seconds_accounted_for =< timestamp
+    if(!month_valid || !seconds_within_month)
+      (seconds_accounted_for, i)
+    else
+      determine_month(i + 1, year, timestamp, seconds_accounted_for + seconds_in_month)
+
+  private function determine_day(i : int, month : int,
+    year : int, timestamp : int, seconds_accounted_for : int) : int =
+
+    let day_valid : bool = i =< get_days_in_month(month, year)
+    let day_within_month = state.day_in_seconds + seconds_accounted_for =< timestamp
+    if(!day_valid || !day_within_month)
+      i
+    else
+      determine_day(i + 1, month, year, timestamp, seconds_accounted_for + state.day_in_seconds)
 
   private function date_time_init() : date_time =
     { year = state.origin_year,
@@ -98,4 +220,4 @@ contract Identity =
       weekday = 0 }
 
   private function modulo(num : int, divisor : int) : int =
-  	num - divisor * (num / divisor)
+    num - divisor * (num / divisor)
